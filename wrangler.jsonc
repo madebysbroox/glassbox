@@ -1,0 +1,8 @@
+{
+  "name": "glassbox",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Files in public/ are served directly; everything else (i.e. /api/chat) hits the Worker.
+  "assets": { "directory": "./public" }
+}

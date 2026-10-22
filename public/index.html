@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Glassbox</title>
+  <meta name="description" content="Ask a question and watch the request travel to a language model and back.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect x=%221.5%22 y=%221.5%22 width=%2213%22 height=%2213%22 rx=%223%22 fill=%22none%22 stroke=%22%232f6fdb%22 stroke-width=%221.5%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%222.5%22 fill=%22%232f6fdb%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Glassbox</h1>
+      <p class="tagline">Ask anything in 140 characters. Watch the request travel to the model and back.</p>
+    </header>
+
+    <section id="conversation" aria-live="polite"></section>
+
+    <form id="composer" autocomplete="off">
+      <label for="prompt" class="visually-hidden">Your message</label>
+      <input id="prompt" name="prompt" maxlength="140" placeholder="Ask something…" required>
+      <span id="chars" class="chars">140</span>
+      <button type="submit" id="send">Send</button>
+    </form>
+    <p id="turns" class="turns"></p>
+
+    <section class="engine" aria-label="What just happened">
+      <div class="counters">
+        <div><span class="label">Tokens in</span><span class="value" id="c-in">–</span></div>
+        <div><span class="label">Tokens out</span><span class="value" id="c-out">–</span></div>
+        <div><span class="label">Burned thinking</span><span class="value" id="c-burn">–</span></div>
+        <div><span class="label">First token</span><span class="value" id="c-first">–</span></div>
+        <div><span class="label">This turn</span><span class="value" id="c-cost">–</span></div>
+        <div><span class="label">Session</span><span class="value" id="c-session">$0.00000</span></div>
+      </div>
+      <ol id="log" class="log"></ol>
+    </section>
+
+    <footer>
+      <button type="button" id="reset" class="link">Start over</button>
+      <span>Answers by Claude Haiku 5.5.</span>
+    </footer>
+  </main>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
