@@ -1,9 +1,17 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { DurableObject } from "cloudflare:workers";
 
 export interface Env {
   ANTHROPIC_API_KEY: string;
   // Only set for local testing against test/mock-anthropic.mjs.
   ANTHROPIC_BASE_URL?: string;
+  TURNSTILE_SITE_KEY: string;
+  TURNSTILE_SECRET: string;
+  // Signs the session cookie handed out after a Turnstile check.
+  SESSION_SECRET: string;
+  DAILY_CAP_USD: string;
+  CHAT_LIMITER: RateLimit;
+  BUDGET: DurableObjectNamespace<Budget>;
 }
 
 const MODEL = "claude-haiku-5-5";
@@ -15,6 +23,8 @@ const MAX_ASSISTANT_CHARS = 4000;
 // USD per token for Claude Haiku 5.5 (prompts under 100K tokens).
 const PRICE_IN = 0.1 / 1e6;
 const PRICE_OUT = 0.5 / 1e6;
+const SESSION_COOKIE = "gb_session";
+const SESSION_SECONDS = 60 * 60;
 
 const SYSTEM =
   "You are the engine inside Glassbox, a website that shows people how a request to a language model travels and gets answered. " +
@@ -25,6 +35,11 @@ type Turn = { role: "user" | "assistant"; content: string };
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
+    if (url.pathname === "/api/config") return Response.json({ turnstile_site_key: env.TURNSTILE_SITE_KEY });
+    if (url.pathname === "/api/session") {
+      if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+      return session(req, env);
+    }
     if (url.pathname === "/api/chat") {
       if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
       return chat(req, env, ctx);
@@ -33,8 +48,83 @@ export default {
   },
 };
 
+// Daily spend across all visitors. One instance, keyed by UTC date.
+export class Budget extends DurableObject<Env> {
+  async spentToday(): Promise<number> {
+    return (await this.ctx.storage.get<number>(today())) ?? 0;
+  }
+
+  async add(usd: number): Promise<void> {
+    const key = today();
+    const spent = ((await this.ctx.storage.get<number>(key)) ?? 0) + usd;
+    const old = [...(await this.ctx.storage.list()).keys()].filter((k) => k !== key);
+    if (old.length) await this.ctx.storage.delete(old);
+    await this.ctx.storage.put(key, spent);
+  }
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function budget(env: Env) {
+  return env.BUDGET.get(env.BUDGET.idFromName("global"));
+}
+
+// Verifies a Turnstile token and swaps it for a signed cookie, so visitors solve one check per hour, not per message.
+async function session(req: Request, env: Env): Promise<Response> {
+  let token: unknown;
+  try {
+    ({ token } = (await req.json()) as { token?: unknown });
+  } catch {
+    return Response.json({ error: "bad request" }, { status: 400 });
+  }
+  if (typeof token !== "string" || !token) return Response.json({ error: "missing token" }, { status: 400 });
+
+  const form = new FormData();
+  form.append("secret", env.TURNSTILE_SECRET);
+  form.append("response", token);
+  const ip = req.headers.get("cf-connecting-ip");
+  if (ip) form.append("remoteip", ip);
+  const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", body: form });
+  const outcome = (await res.json()) as { success: boolean };
+  if (!outcome.success) return Response.json({ error: "The human check failed. Reload and try again." }, { status: 403 });
+
+  const expires = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
+  const value = `${expires}.${await sign(String(expires), env.SESSION_SECRET)}`;
+  const secure = new URL(req.url).protocol === "https:" ? "; Secure" : "";
+  return Response.json(
+    { ok: true },
+    { headers: { "set-cookie": `${SESSION_COOKIE}=${value}; Path=/api; Max-Age=${SESSION_SECONDS}; HttpOnly; SameSite=Strict${secure}` } },
+  );
+}
+
+async function hasSession(req: Request, env: Env): Promise<boolean> {
+  const cookie = req.headers.get("cookie") ?? "";
+  const match = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=(\\d+)\\.([0-9a-f]+)`));
+  if (!match) return false;
+  const [, expires, mac] = match;
+  if (Number(expires) < Date.now() / 1000) return false;
+  return (await sign(expires, env.SESSION_SECRET)) === mac;
+}
+
+async function sign(data: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function chat(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const received = Date.now();
+
+  if (!(await hasSession(req, env))) {
+    return Response.json({ error: "Checking you're human first.", challenge: true }, { status: 401 });
+  }
+  const { success } = await env.CHAT_LIMITER.limit({ key: req.headers.get("cf-connecting-ip") ?? "unknown" });
+  if (!success) return Response.json({ error: "Slow down a little. Try again in a minute." }, { status: 429 });
+  if ((await budget(env).spentToday()) >= Number(env.DAILY_CAP_USD)) {
+    return Response.json({ error: "Glassbox has used up today's budget. Come back tomorrow." }, { status: 503 });
+  }
 
   let turns: Turn[];
   try {
@@ -127,11 +217,13 @@ async function relay(
       }
     }
 
+    const cost = inputTokens * PRICE_IN + outputTokens * PRICE_OUT;
+    await budget(env).add(cost);
     await send("done", {
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       stop_reason: stopReason,
-      cost_usd: inputTokens * PRICE_IN + outputTokens * PRICE_OUT,
+      cost_usd: cost,
       first_text_ms: firstTextMs,
       total_ms: Date.now() - received,
     });

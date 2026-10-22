@@ -3,6 +3,15 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Files in public/ are served directly; everything else (i.e. /api/chat) hits the Worker.
-  "assets": { "directory": "./public" }
+  // Files in public/ are served directly; everything else (/api/*) hits the Worker.
+  "assets": { "directory": "./public" },
+  "vars": {
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAFgH5G_P0XnUspGn",
+    // Total spend across all visitors per UTC day, in USD.
+    "DAILY_CAP_USD": "1.00"
+  },
+  // At most 6 messages a minute from one IP address.
+  "ratelimits": [{ "name": "CHAT_LIMITER", "namespace_id": "1001", "simple": { "limit": 6, "period": 60 } }],
+  "durable_objects": { "bindings": [{ "name": "BUDGET", "class_name": "Budget" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Budget"] }]
 }

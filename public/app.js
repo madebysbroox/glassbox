@@ -1,3 +1,5 @@
+import * as strip from "/strip.js";
+
 const MAX_TURNS = 10;
 
 const $ = (id) => document.getElementById(id);
@@ -10,6 +12,10 @@ const log = $("log");
 let history = [];
 let sessionCost = 0;
 let busy = false;
+let sessionReady = null;
+let widgetId = null;
+// Callbacks for the Turnstile check in flight; the widget is rendered once and reset for later checks.
+let pending = null;
 
 input.addEventListener("input", () => {
   $("chars").textContent = 140 - [...input.value].length;
@@ -64,36 +70,57 @@ async function ask(answer) {
   let reply = "";
   let estVisible = 0;
 
-  logLine(0, "request leaves your browser");
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ messages: history }),
-  });
+  await ensureSession();
+  const payload = JSON.stringify({ messages: history });
+  const estTokens = Math.round(payload.length / 4);
+  const tSent = since();
+  let tReceived = 0;
+  logLine(tSent, "request leaves your browser");
+  strip.sendOut(estTokens);
+  const post = () =>
+    fetch("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: payload,
+    });
+  let res = await post();
+  if (res.status === 401) {
+    // The session cookie expired; pass the human check again and retry once.
+    sessionReady = null;
+    logLine(since(), "session expired, checking you're human again");
+    await ensureSession();
+    res = await post();
+  }
   if (!res.ok || !res.body) {
     const { error } = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
     answer.remove();
     bubble("error", error);
     logLine(since(), `relay refused: ${error}`);
+    strip.finished();
     return null;
   }
 
   for await (const { event, data } of sse(res.body)) {
     switch (event) {
       case "relay_received":
-        logLine(since(), "relay received it");
+        tReceived = since();
+        logLine(tReceived, "relay received it");
         break;
       case "dispatched":
+        strip.dispatch(estTokens, tReceived - tSent);
         logLine(since(), "relay sent it to the Anthropic API");
         break;
       case "accepted":
         $("c-in").textContent = data.input_tokens;
+        strip.accepted(data.input_tokens, data.ms);
         logLine(since(), `API accepted ${data.input_tokens} input tokens (${data.ms} ms from relay)`);
         break;
       case "thinking":
+        strip.thinking();
         logLine(since(), "engine is thinking");
         break;
       case "text":
+        strip.inbound();
         if (!reply) logLine(since(), "first words arrive");
         reply += data.text;
         estVisible += data.est_tokens;
@@ -108,6 +135,7 @@ async function ask(answer) {
         $("c-cost").textContent = usd(data.cost_usd);
         sessionCost += data.cost_usd;
         $("c-session").textContent = usd(sessionCost);
+        strip.finished();
         logLine(since(), `done: ${data.output_tokens} output tokens, ${data.stop_reason}`);
         if (data.stop_reason === "refusal") {
           answer.remove();
@@ -117,13 +145,68 @@ async function ask(answer) {
         break;
       }
       case "error":
+        strip.finished();
         answer.remove();
         bubble("error", data.reason);
         logLine(since(), `error: ${data.reason}`);
         return null;
     }
   }
+  strip.finished();
   return reply || null;
+}
+
+// Runs the Turnstile check once and trades its token for a session cookie.
+// The widget stays invisible unless Cloudflare wants the visitor to click.
+function ensureSession() {
+  sessionReady ??= new Promise((resolve, reject) => {
+    const onToken = async (token) => {
+      try {
+        const res = await fetch("/api/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+        resolve();
+      } catch (err) {
+        sessionReady = null;
+        reject(err);
+      }
+    };
+    const onError = () => {
+      sessionReady = null;
+      reject(new Error("the human check could not load"));
+    };
+    whenTurnstile().then(async (turnstile) => {
+      if (widgetId !== null) {
+        pending = { onToken, onError };
+        turnstile.reset(widgetId);
+        return;
+      }
+      const { turnstile_site_key } = await (await fetch("/api/config")).json();
+      pending = { onToken, onError };
+      widgetId = turnstile.render("#challenge", {
+        sitekey: turnstile_site_key,
+        appearance: "interaction-only",
+        callback: (t) => pending.onToken(t),
+        "error-callback": () => pending.onError(),
+      });
+    }, onError);
+  });
+  return sessionReady;
+}
+
+function whenTurnstile() {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const poll = () => {
+      if (window.turnstile) resolve(window.turnstile);
+      else if (Date.now() - started > 10000) reject(new Error("Turnstile did not load"));
+      else setTimeout(poll, 50);
+    };
+    poll();
+  });
 }
 
 // Minimal SSE reader for a fetch() body (EventSource can't POST).
@@ -174,6 +257,9 @@ function updateTurns() {
   const left = MAX_TURNS - userTurns();
   $("turns").textContent = left <= 0 ? "That's the end of this conversation. Start over to keep going." : left < MAX_TURNS ? `${left} messages left in this conversation` : "";
 }
+
+// Start the human check while the visitor is still typing.
+ensureSession().catch(() => {});
 
 function usd(n) {
   return `$${n.toFixed(5)}`;
