@@ -1,3 +1,5 @@
+import * as strip from "/strip.js";
+
 const MAX_TURNS = 10;
 
 const $ = (id) => document.getElementById(id);
@@ -10,6 +12,12 @@ const log = $("log");
 let history = [];
 let sessionCost = 0;
 let busy = false;
+// Bot check: a Turnstile token for the first message, then the relay's signed pass.
+let pass = null;
+let turnstileToken = null;
+let turnstileWidget = null;
+
+setupCheck();
 
 input.addEventListener("input", () => {
   $("chars").textContent = 140 - [...input.value].length;
@@ -64,36 +72,53 @@ async function ask(answer) {
   let reply = "";
   let estVisible = 0;
 
+  const payload = JSON.stringify({ messages: history, pass, turnstile_token: pass ? undefined : turnstileToken });
+  const estTokens = Math.round(payload.length / 4);
+  let tReceived = 0;
+
   logLine(0, "request leaves your browser");
+  strip.sendOut(estTokens);
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ messages: history }),
+    body: payload,
   });
   if (!res.ok || !res.body) {
-    const { error } = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    const { error, need_check } = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    if (need_check) resetCheck();
     answer.remove();
     bubble("error", error);
     logLine(since(), `relay refused: ${error}`);
+    strip.finished();
     return null;
   }
 
   for await (const { event, data } of sse(res.body)) {
     switch (event) {
       case "relay_received":
-        logLine(since(), "relay received it");
+        if (data.pass) {
+          pass = data.pass;
+          turnstileToken = null;
+          $("check").hidden = true;
+        }
+        tReceived = since();
+        logLine(tReceived, "relay received it");
         break;
       case "dispatched":
+        strip.dispatch(estTokens, tReceived);
         logLine(since(), "relay sent it to the Anthropic API");
         break;
       case "accepted":
         $("c-in").textContent = data.input_tokens;
+        strip.accepted(data.input_tokens, data.ms);
         logLine(since(), `API accepted ${data.input_tokens} input tokens (${data.ms} ms from relay)`);
         break;
       case "thinking":
+        strip.thinking();
         logLine(since(), "engine is thinking");
         break;
       case "text":
+        strip.inbound();
         if (!reply) logLine(since(), "first words arrive");
         reply += data.text;
         estVisible += data.est_tokens;
@@ -108,6 +133,7 @@ async function ask(answer) {
         $("c-cost").textContent = usd(data.cost_usd);
         sessionCost += data.cost_usd;
         $("c-session").textContent = usd(sessionCost);
+        strip.finished();
         logLine(since(), `done: ${data.output_tokens} output tokens, ${data.stop_reason}`);
         if (data.stop_reason === "refusal") {
           answer.remove();
@@ -117,13 +143,45 @@ async function ask(answer) {
         break;
       }
       case "error":
+        strip.finished();
         answer.remove();
         bubble("error", data.reason);
         logLine(since(), `error: ${data.reason}`);
         return null;
     }
   }
+  strip.finished();
   return reply || null;
+}
+
+// Loads Turnstile only if the relay has it switched on.
+async function setupCheck() {
+  const config = await fetch("/api/config").then((r) => r.json()).catch(() => ({}));
+  if (!config.turnstile_site_key) return;
+  sendBtn.disabled = true;
+  await new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.onload = resolve;
+    document.head.append(script);
+  });
+  $("check").hidden = false;
+  turnstileWidget = window.turnstile.render("#check", {
+    sitekey: config.turnstile_site_key,
+    callback: (token) => {
+      turnstileToken = token;
+      sendBtn.disabled = busy || userTurns() >= MAX_TURNS;
+    },
+    "expired-callback": () => (turnstileToken = null),
+  });
+}
+
+function resetCheck() {
+  pass = null;
+  turnstileToken = null;
+  if (turnstileWidget == null) return;
+  $("check").hidden = false;
+  window.turnstile.reset(turnstileWidget);
 }
 
 // Minimal SSE reader for a fetch() body (EventSource can't POST).

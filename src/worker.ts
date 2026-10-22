@@ -1,9 +1,19 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { Guard } from "./guard";
+import { checkPass, issuePass, verifyTurnstile } from "./pass";
+
+export { Guard };
 
 export interface Env {
   ANTHROPIC_API_KEY: string;
   // Only set for local testing against test/mock-anthropic.mjs.
   ANTHROPIC_BASE_URL?: string;
+  GUARD: DurableObjectNamespace<Guard>;
+  DAILY_CAP_USD: string;
+  HOURLY_LIMIT: string;
+  // Turnstile is skipped until both of these are set.
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET_KEY?: string;
 }
 
 const MODEL = "claude-haiku-5-5";
@@ -21,10 +31,14 @@ const SYSTEM =
   "Visitors type short messages of up to 140 characters. Answer helpfully and briefly: a few sentences, plain text, no markdown headings.";
 
 type Turn = { role: "user" | "assistant"; content: string };
+type Send = (event: string, data: Record<string, unknown>) => Promise<void>;
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
+    if (url.pathname === "/api/config") {
+      return Response.json({ turnstile_site_key: turnstileOn(env) ? env.TURNSTILE_SITE_KEY : null });
+    }
     if (url.pathname === "/api/chat") {
       if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
       return chat(req, env, ctx);
@@ -37,20 +51,43 @@ async function chat(req: Request, env: Env, ctx: ExecutionContext): Promise<Resp
   const received = Date.now();
 
   let turns: Turn[];
+  let body: { messages?: unknown; pass?: unknown; turnstile_token?: unknown };
   try {
-    const body = (await req.json()) as { messages?: unknown };
+    body = await req.json();
     turns = validate(body.messages);
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 400 });
   }
 
+  const ip = req.headers.get("cf-connecting-ip") ?? "local";
+
+  // A valid pass means this visitor already solved Turnstile within the hour.
+  let newPass: string | null = null;
+  if (turnstileOn(env) && !(await checkPass(env.TURNSTILE_SECRET_KEY!, body.pass, received))) {
+    if (!(await verifyTurnstile(env.TURNSTILE_SECRET_KEY!, body.turnstile_token, ip))) {
+      return Response.json({ error: "Please complete the quick human check first.", need_check: true }, { status: 403 });
+    }
+    newPass = await issuePass(env.TURNSTILE_SECRET_KEY!, received);
+  }
+
+  const guard = env.GUARD.get(env.GUARD.idFromName("global"));
+  const admission = await guard.admit(ip, received, Number(env.HOURLY_LIMIT), Number(env.DAILY_CAP_USD));
+  if (!admission.ok) {
+    const error =
+      admission.reason === "cap"
+        ? "Out of fuel for today. Glassbox refuels at midnight UTC."
+        : `That's ${env.HOURLY_LIMIT} messages this hour. Come back a little later.`;
+    return Response.json({ error }, { status: 429 });
+  }
+
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
-  const send = (event: string, data: Record<string, unknown>) =>
+  const send: Send = (event, data) =>
     writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
 
-  ctx.waitUntil(relay(turns, env, received, send).finally(() => writer.close()));
+  const record = (costUsd: number) => guard.record(costUsd, Date.now());
+  ctx.waitUntil(relay(turns, env, received, newPass, send, record).finally(() => writer.close()));
 
   return new Response(readable, {
     headers: {
@@ -83,9 +120,11 @@ async function relay(
   turns: Turn[],
   env: Env,
   received: number,
-  send: (event: string, data: Record<string, unknown>) => Promise<void>,
+  pass: string | null,
+  send: Send,
+  record: (costUsd: number) => Promise<number>,
 ): Promise<void> {
-  await send("relay_received", { server_time: received });
+  await send("relay_received", { server_time: received, ...(pass && { pass }) });
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_BASE_URL || undefined });
   const dispatched = Date.now();
@@ -127,11 +166,13 @@ async function relay(
       }
     }
 
+    const cost = inputTokens * PRICE_IN + outputTokens * PRICE_OUT;
+    await record(cost);
     await send("done", {
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       stop_reason: stopReason,
-      cost_usd: inputTokens * PRICE_IN + outputTokens * PRICE_OUT,
+      cost_usd: cost,
       first_text_ms: firstTextMs,
       total_ms: Date.now() - received,
     });
@@ -143,4 +184,8 @@ async function relay(
     else if (err instanceof Anthropic.BadRequestError) reason = "The API rejected that request.";
     await send("error", { reason });
   }
+}
+
+function turnstileOn(env: Env): boolean {
+  return Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY);
 }

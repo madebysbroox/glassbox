@@ -3,6 +3,17 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Files in public/ are served directly; everything else (i.e. /api/chat) hits the Worker.
-  "assets": { "directory": "./public" }
+  // Files in public/ are served directly; everything else (i.e. /api/*) hits the Worker.
+  "assets": { "directory": "./public" },
+  "vars": {
+    "DAILY_CAP_USD": "2",
+    "HOURLY_LIMIT": "20",
+    // Paste your Turnstile site key here (it's public). The secret key goes in with
+    // `wrangler secret put TURNSTILE_SECRET_KEY`. Until both are set, the check is skipped.
+    "TURNSTILE_SITE_KEY": ""
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "GUARD", "class_name": "Guard" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Guard"] }]
 }
