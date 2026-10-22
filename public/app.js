@@ -168,6 +168,8 @@ function ensureSession() {
           body: JSON.stringify({ token }),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+        // The check has done its job; hide the widget (and its "Success!" state) until the next one.
+        $("challenge").hidden = true;
         resolve();
       } catch (err) {
         sessionReady = null;
@@ -179,6 +181,7 @@ function ensureSession() {
       reject(new Error("the human check could not load"));
     };
     whenTurnstile().then(async (turnstile) => {
+      $("challenge").hidden = false;
       if (widgetId !== null) {
         pending = { onToken, onError };
         turnstile.reset(widgetId);
