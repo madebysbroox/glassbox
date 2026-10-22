@@ -49,6 +49,7 @@ button { font: inherit; cursor: pointer; }
   padding: 10px 16px; border: 0; border-radius: 10px; background: var(--fg); color: var(--bg);
 }
 #send:disabled { opacity: 0.4; cursor: default; }
+.challenge:not(:empty) { margin-top: 12px; }
 .turns { font-size: 13px; color: var(--muted); margin: 6px 0 0; min-height: 1.5em; }
 
 .engine { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
