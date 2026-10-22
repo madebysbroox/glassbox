@@ -4,6 +4,8 @@ A chat page where every message (140 characters max) goes to Claude Haiku 5.5 th
 
 Phases 2 and 4 of the design doc are in: plain chat plus counters, and bot protection with a daily cap. The animated strip and ads come next.
 
+A strip under the chat animates each leg as it happens: grey packets out to the relay and on to the API, the engine pulsing while the model thinks, and blue packets streaming back. Every movement is triggered by a real event from the relay, and it holds still for visitors who prefer reduced motion.
+
 ## Protection
 
 - **Turnstile.** The page runs an invisible Cloudflare Turnstile check (it only shows a checkbox if Cloudflare is unsure). `/api/session` verifies the token and sets a signed `gb_session` cookie for an hour; `/api/chat` refuses requests without it.
@@ -13,7 +15,7 @@ Phases 2 and 4 of the design doc are in: plain chat plus counters, and bot prote
 ## Layout
 
 - `src/worker.ts`: the relay. It holds the API key, checks limits (140 characters, 10 turns, 400 output tokens), calls the API with streaming, and sends its own timed events to the page over SSE.
-- `public/`: the static page (`index.html`, `style.css`, `app.js`). No framework, no build step.
+- `public/`: the static page (`index.html`, `style.css`, `app.js`, `strip.js`). No framework, no build step.
 - `test/mock-anthropic.mjs`: a fake Messages API that streams a canned answer, so you can run everything without a key.
 
 ## Run it locally with the mock (no API key, no cost)

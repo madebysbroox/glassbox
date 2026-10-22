@@ -27,6 +27,26 @@
     <div id="challenge" class="challenge"></div>
 
     <section class="engine" aria-label="What just happened">
+      <svg id="strip" class="strip" viewBox="0 0 600 112" role="img" aria-label="Your request travelling to the model and back">
+        <g class="wire" id="leg1">
+          <line x1="64" y1="44" x2="216" y2="44"/>
+          <line x1="216" y1="68" x2="64" y2="68" class="back"/>
+        </g>
+        <g class="wire" id="leg2">
+          <line x1="296" y1="44" x2="464" y2="44"/>
+          <line x1="464" y1="68" x2="296" y2="68" class="back"/>
+        </g>
+        <g class="node"><rect x="4" y="32" width="60" height="48" rx="8"/><text x="34" y="60">You</text></g>
+        <g class="node"><rect x="216" y="32" width="80" height="48" rx="8"/><text x="256" y="60">Relay</text></g>
+        <g class="node port" id="port">
+          <rect x="464" y="20" width="132" height="72" rx="8"/>
+          <circle class="core" cx="530" cy="48" r="12"/>
+          <text x="530" y="82" class="small">Anthropic</text>
+        </g>
+        <text id="leg1-ms" class="small" x="140" y="96"></text>
+        <text id="leg2-ms" class="small" x="380" y="96"></text>
+        <g id="packets"></g>
+      </svg>
       <div class="counters">
         <div><span class="label">Tokens in</span><span class="value" id="c-in">–</span></div>
         <div><span class="label">Tokens out</span><span class="value" id="c-out">–</span></div>
