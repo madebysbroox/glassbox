@@ -2,9 +2,11 @@
 
 A chat page where every message (140 characters max) goes to Claude Haiku 5.5 through a small Cloudflare Worker, and the page shows what happened on the way: tokens in and out, the thinking tokens that were billed but never shown, time to first token, cost, and a millisecond log of each leg.
 
-Phases 2 and 4 of the design doc are in: plain chat plus counters, and bot protection with a daily cap. The animated strip and ads come next.
+Phases 2 to 4 of the design doc are in: plain chat plus counters, the animated strip, and bot protection with a daily cap. Ads come next.
 
 A strip under the chat animates each leg as it happens: grey packets out to the relay and on to the API, the engine pulsing while the model thinks, and blue packets streaming back. Every movement is triggered by a real event from the relay, and it holds still for visitors who prefer reduced motion.
+
+Older messages recede like the Star Wars opening crawl: as they rise toward the top they tilt back and fade. Scroll up and they come down flat and readable. With reduced motion they fade without tilting.
 
 ## Protection
 
@@ -15,7 +17,7 @@ A strip under the chat animates each leg as it happens: grey packets out to the 
 ## Layout
 
 - `src/worker.ts`: the relay. It holds the API key, checks limits (140 characters, 10 turns, 400 output tokens), calls the API with streaming, and sends its own timed events to the page over SSE.
-- `public/`: the static page (`index.html`, `style.css`, `app.js`, `strip.js`). No framework, no build step.
+- `public/`: the static page (`index.html`, `style.css`, `app.js`, `strip.js`, `crawl.js`). No framework, no build step.
 - `test/mock-anthropic.mjs`: a fake Messages API that streams a canned answer, so you can run everything without a key.
 
 ## Run it locally with the mock (no API key, no cost)

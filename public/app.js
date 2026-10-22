@@ -1,4 +1,5 @@
 import * as strip from "/strip.js";
+import * as crawl from "/crawl.js";
 
 const MAX_TURNS = 10;
 
@@ -8,6 +9,7 @@ const input = $("prompt");
 const sendBtn = $("send");
 const convo = $("conversation");
 const log = $("log");
+crawl.attach(convo);
 
 let history = [];
 let sessionCost = 0;
@@ -26,6 +28,7 @@ $("reset").addEventListener("click", () => {
   history = [];
   sessionCost = 0;
   convo.replaceChildren();
+  crawl.follow(true);
   log.replaceChildren();
   for (const id of ["c-in", "c-out", "c-burn", "c-first", "c-cost"]) $(id).textContent = "–";
   $("c-session").textContent = usd(0);
@@ -125,6 +128,7 @@ async function ask(answer) {
         reply += data.text;
         estVisible += data.est_tokens;
         answer.textContent = reply;
+        crawl.follow();
         $("c-out").textContent = `~${estVisible}`;
         break;
       case "done": {
@@ -240,7 +244,7 @@ function bubble(kind, text) {
   el.className = `msg ${kind}`;
   el.textContent = text;
   convo.append(el);
-  el.scrollIntoView({ block: "nearest" });
+  crawl.follow(kind === "user");
   return el;
 }
 
