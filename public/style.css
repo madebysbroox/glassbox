@@ -30,8 +30,20 @@ main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
 h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 .tagline { color: var(--muted); margin: 4px 0 24px; }
 
-#conversation { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
-.msg { padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; max-width: 90%; }
+#conversation {
+  display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;
+  max-height: min(56vh, 520px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+  /* Messages fade into the distance at the top, like the opening crawl. */
+}
+#conversation.crawling {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 30%);
+  mask-image: linear-gradient(to bottom, transparent, #000 30%);
+}
+#conversation::-webkit-scrollbar { display: none; }
+#conversation:empty { margin-bottom: 0; }
+/* Once it scrolls, a spacer lets even the first message be pulled down into flat view. */
+#conversation.crawling::before { content: ""; flex: 0 0 calc(min(56vh, 520px) - 200px); }
+.msg { padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; max-width: 90%; transform-origin: 50% 100%; will-change: transform, opacity; }
 .msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
 .msg.assistant { align-self: flex-start; background: var(--bubble); }
 .msg.assistant:empty::after { content: "…"; color: var(--muted); }
